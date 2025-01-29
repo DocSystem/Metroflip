@@ -40,7 +40,7 @@ const char* get_navigo_tariff(int tariff) {
     case 0x0003:
         return "Navigo Jour";
     case 0x0004:
-        return "Imagine R Junior";
+        return "Imagine R Scolaire";
     case 0x0005:
         return "Imagine R Etudiant";
     case 0x000D:
@@ -401,7 +401,7 @@ void show_navigo_event_info(
     char* station = get_navigo_station(
         event->station_group_id, event->station_id, event->station_sub_id, navigo_station_type);
     char* sector = NULL;
-    if(navigo_station_type == COMMUTER_TRAIN || navigo_station_type == TRAM) {
+    if(navigo_station_type == COMMUTER_TRAIN) {
         sector = get_navigo_train_sector(event->station_group_id);
     } else {
         sector = get_navigo_station(event->station_group_id, 0, 0, navigo_station_type);
@@ -556,7 +556,7 @@ void show_navigo_special_event_info(NavigoCardSpecialEvent* event, FuriString* p
     char* station = get_navigo_station(
         event->station_group_id, event->station_id, event->station_sub_id, navigo_station_type);
     char* sector = NULL;
-    if(navigo_station_type == COMMUTER_TRAIN || navigo_station_type == TRAM) {
+    if(navigo_station_type == COMMUTER_TRAIN) {
         sector = get_navigo_train_sector(event->station_group_id);
     } else {
         sector = get_navigo_station(event->station_group_id, 0, 0, navigo_station_type);
