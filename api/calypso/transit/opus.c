@@ -91,11 +91,11 @@ char* get_opus_transport_line(int route_number) {
         return found_station_name;
     }
 
-    char* route_name = malloc(5 * sizeof(char));
+    char* route_name = malloc(9 * sizeof(char));
     if(!route_name) {
         return "Unknown";
     }
-    snprintf(route_name, 5, "0x%02X", route_number);
+    snprintf(route_name, 9, "0x%02X", route_number);
     return route_name;
 }
 
