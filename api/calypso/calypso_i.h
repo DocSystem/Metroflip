@@ -1,10 +1,13 @@
 #include "transit/navigo_i.h"
-#include "transit/ravkav_i.h"
+#include "transit/korrigo_i.h"
 #include "transit/opus_i.h"
+#include "transit/ravkav_i.h"
 #include <furi.h>
 
 #ifndef CALYPSO_I_H
 #define CALYPSO_I_H
+
+#define CALYPSO_CARD_DUMPS_COUNT 13
 
 typedef enum {
     CALYPSO_CARD_MOBIB,
@@ -24,9 +27,20 @@ typedef enum {
 } CALYPSO_CARD_TYPE;
 
 typedef struct {
+    int folder;
+    int app;
+    int record;
+    char* data;
+} CalypsoAppDump;
+
+typedef struct {
     NavigoCardData* navigo;
+    KorrigoCardData* korrigo;
     OpusCardData* opus;
     RavKavCardData* ravkav;
+
+    CalypsoAppDump dumps[CALYPSO_CARD_DUMPS_COUNT];
+    int dumps_count;
 
     CALYPSO_CARD_TYPE card_type;
     unsigned int card_number;

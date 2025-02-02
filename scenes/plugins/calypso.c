@@ -98,6 +98,130 @@ int check_response(
     return 0;
 }
 
+size_t b64_encoded_size(size_t inlen) {
+    size_t ret;
+
+    ret = inlen;
+    if(inlen % 3 != 0) ret += 3 - (inlen % 3);
+    ret /= 3;
+    ret *= 4;
+
+    return ret;
+}
+
+const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+unsigned char* binary_to_bytes(const char* bin, size_t* out_len) {
+    size_t bin_len = strlen(bin);
+    *out_len = (bin_len + 7) / 8; // Calculate the number of bytes needed
+
+    unsigned char* bytes = (unsigned char*)malloc(*out_len);
+    if(!bytes) return NULL;
+
+    memset(bytes, 0, *out_len);
+
+    for(size_t i = 0; i < bin_len; i++) {
+        if(bin[i] == '1') {
+            bytes[i / 8] |= (1 << (7 - (i % 8)));
+        }
+    }
+
+    return bytes;
+}
+
+// Function to encode bytes to Base64
+char* base64_encode(const unsigned char* bytes, size_t in_len) {
+    size_t out_len = 4 * ((in_len + 2) / 3); // Base64 output size
+    char* encoded = (char*)malloc(out_len + 1);
+    if(!encoded) return NULL;
+
+    size_t i, j;
+    for(i = 0, j = 0; i < in_len;) {
+        uint32_t octet_a = i < in_len ? bytes[i++] : 0;
+        uint32_t octet_b = i < in_len ? bytes[i++] : 0;
+        uint32_t octet_c = i < in_len ? bytes[i++] : 0;
+
+        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+        encoded[j++] = base64_chars[(triple >> 18) & 0x3F];
+        encoded[j++] = base64_chars[(triple >> 12) & 0x3F];
+        encoded[j++] = (i > in_len + 1) ? '=' : base64_chars[(triple >> 6) & 0x3F];
+        encoded[j++] = (i > in_len) ? '=' : base64_chars[triple & 0x3F];
+    }
+
+    encoded[j] = '\0';
+    return encoded;
+}
+
+char* binary_to_base64(const char* binary) {
+    size_t byte_len;
+    unsigned char* bytes = binary_to_bytes(binary, &byte_len);
+    if(!bytes) return NULL;
+
+    char* base64 = base64_encode(bytes, byte_len);
+    free(bytes);
+    return base64;
+}
+
+int save_card_dump(CalypsoCardData* card) {
+    char path[64];
+    snprintf(path, sizeof(path), APP_DATA_PATH("card_%u.mf"), card->card_number);
+
+    // Open storage
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+
+    // Allocate file
+    File* file = storage_file_alloc(storage);
+
+    FURI_LOG_I(TAG, "Saving card dump to %s", path);
+
+    // Open file, write data and close it
+    if(!storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        FURI_LOG_E(TAG, "Failed to open file");
+
+        // Deallocate file
+        storage_file_free(file);
+
+        // Close storage
+        furi_record_close(RECORD_STORAGE);
+        return 1;
+    }
+    for(int i = 0; i < card->dumps_count; i++) {
+        // write dump.folder,dump.app,dump.record,dump.data in CSV format
+        char dump[1024];
+        char* base64dumpdata = binary_to_base64(card->dumps[i].data);
+        snprintf(
+            dump,
+            sizeof(dump),
+            "%d,%d,%d,%s\n",
+            card->dumps[i].folder,
+            card->dumps[i].app,
+            card->dumps[i].record,
+            base64dumpdata);
+        free(base64dumpdata);
+        if(!storage_file_write(file, dump, strlen(dump))) {
+            FURI_LOG_E(TAG, "Failed to write to file");
+            storage_file_close(file);
+
+            // Deallocate file
+            storage_file_free(file);
+
+            // Close storage
+            furi_record_close(RECORD_STORAGE);
+            return 1;
+        }
+    }
+    storage_file_close(file);
+
+    // Deallocate file
+    storage_file_free(file);
+
+    // Close storage
+    furi_record_close(RECORD_STORAGE);
+
+    return 0;
+}
+
 void update_page_info(void* context, FuriString* parsed_data) {
     Metroflip* app = context;
     CalypsoContext* ctx = app->calypso_context;
@@ -117,6 +241,10 @@ void update_page_info(void* context, FuriString* parsed_data) {
             furi_string_cat_printf(parsed_data, "\e#Environment:\n");
             show_navigo_environment_info(
                 &ctx->card->navigo->environment, &ctx->card->navigo->holder, parsed_data);
+            break;
+        }
+        case CALYPSO_CARD_KORRIGO: {
+            furi_string_cat_printf(parsed_data, "\e#KorriGo %u:\n", ctx->card->card_number);
             break;
         }
         case CALYPSO_CARD_OPUS: {
@@ -451,6 +579,11 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                 }
                 icc_bit_representation[response_length * 8] = '\0';
 
+                card->dumps[card->dumps_count].folder = 0;
+                card->dumps[card->dumps_count].app = 2;
+                card->dumps[card->dumps_count].record = 1;
+                card->dumps[card->dumps_count++].data = strdup(icc_bit_representation);
+
                 int start = 128, end = 159;
                 card->card_number = bit_slice_to_dec(icc_bit_representation, start, end);
 
@@ -502,6 +635,12 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                         bits,
                         sizeof(environment_bit_representation));
                 }
+
+                card->dumps[card->dumps_count].folder = 0x20;
+                card->dumps[card->dumps_count].app = 0x01;
+                card->dumps[card->dumps_count].record = 1;
+                card->dumps[card->dumps_count++].data = strdup(environment_bit_representation);
+
                 // FURI_LOG_I(
                 //     TAG, "Environment bit_representation: %s", environment_bit_representation);
                 start = 13;
@@ -620,6 +759,11 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                             strlcat(bit_representation, bits, sizeof(bit_representation));
                         }
                         bit_representation[response_length * 8] = '\0';
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x20;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(bit_representation);
 
                         if(bit_slice_to_dec(
                                bit_representation,
@@ -885,6 +1029,12 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                         strlcat(
                             counter_bit_representation, bits, sizeof(counter_bit_representation));
                     }
+
+                    card->dumps[card->dumps_count].folder = 0x20;
+                    card->dumps[card->dumps_count].app = 0x69;
+                    card->dumps[card->dumps_count].record = 1;
+                    card->dumps[card->dumps_count++].data = strdup(counter_bit_representation);
+
                     // FURI_LOG_I(TAG, "Counter bit_representation: %s", counter_bit_representation);
 
                     // Ticket counts (contracts 1-4)
@@ -949,6 +1099,11 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                             strlcat(
                                 event_bit_representation, bits, sizeof(event_bit_representation));
                         }
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x10;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(event_bit_representation);
 
                         // 2. EventCode
                         const char* event_key = "EventCode";
@@ -1148,6 +1303,11 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                                 event_bit_representation, bits, sizeof(event_bit_representation));
                         }
 
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x40;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(event_bit_representation);
+
                         if(bit_slice_to_dec(
                                event_bit_representation,
                                0,
@@ -1283,6 +1443,193 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
 
                     // Free the calypso structure
                     free_calypso_structure(IntercodeEventStructure);
+                    break;
+                }
+                case CALYPSO_CARD_KORRIGO: {
+                    card->korrigo = malloc(sizeof(KorrigoCardData));
+
+                    card->korrigo->environment.country_num = card->country_num;
+                    card->korrigo->environment.network_num = card->network_num;
+
+                    // Select app for contracts
+                    error = select_new_app(
+                        0x20, 0x20, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                    if(error != 0) {
+                        FURI_LOG_E(TAG, "Failed to select app for contracts");
+                        break;
+                    }
+
+                    // Check the response after selecting app
+                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                        FURI_LOG_E(
+                            TAG, "Failed to check response after selecting app for contracts");
+                        break;
+                    }
+
+                    // Now send the read command for contracts
+                    for(size_t i = 1; i < 5; i++) {
+                        error = read_new_file(
+                            i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to read contract %d", i);
+                            break;
+                        }
+
+                        // Check the response after reading the file
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(
+                                TAG, "Failed to check response after reading contract %d", i);
+                            break;
+                        }
+
+                        char bit_representation[response_length * 8 + 1];
+                        bit_representation[0] = '\0';
+                        for(size_t i = 0; i < response_length; i++) {
+                            char bits[9];
+                            uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                            byte_to_binary(byte, bits);
+                            strlcat(bit_representation, bits, sizeof(bit_representation));
+                        }
+                        bit_representation[response_length * 8] = '\0';
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x20;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                    }
+
+                    // Select app for counters
+                    error = select_new_app(
+                        0x20, 0x69, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                    if(error != 0) {
+                        break;
+                    }
+
+                    // Check the response after selecting app
+                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                        break;
+                    }
+
+                    // read file 1
+                    error =
+                        read_new_file(1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                    if(error != 0) {
+                        break;
+                    }
+
+                    // Check the response after reading the file
+                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                        break;
+                    }
+
+                    char counter_bit_representation[response_length * 8 + 1];
+                    counter_bit_representation[0] = '\0';
+                    for(size_t i = 0; i < response_length; i++) {
+                        char bits[9];
+                        uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                        byte_to_binary(byte, bits);
+                        strlcat(
+                            counter_bit_representation, bits, sizeof(counter_bit_representation));
+                    }
+
+                    card->dumps[card->dumps_count].folder = 0x20;
+                    card->dumps[card->dumps_count].app = 0x69;
+                    card->dumps[card->dumps_count].record = 1;
+                    card->dumps[card->dumps_count++].data = strdup(counter_bit_representation);
+
+                    // Select app for events
+                    error = select_new_app(
+                        0x20, 0x10, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                    if(error != 0) {
+                        FURI_LOG_E(TAG, "Failed to select app for events");
+                        break;
+                    }
+
+                    // Check the response after selecting app
+                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                        FURI_LOG_E(TAG, "Failed to check response after selecting app for events");
+                        break;
+                    }
+
+                    // Now send the read command for events
+                    for(size_t i = 1; i < 4; i++) {
+                        error = read_new_file(
+                            i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to read event %d", i);
+                            break;
+                        }
+
+                        // Check the response after reading the file
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(TAG, "Failed to check response after reading event %d", i);
+                            break;
+                        }
+
+                        char bit_representation[response_length * 8 + 1];
+                        bit_representation[0] = '\0';
+                        for(size_t i = 0; i < response_length; i++) {
+                            char bits[9];
+                            uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                            byte_to_binary(byte, bits);
+                            strlcat(bit_representation, bits, sizeof(bit_representation));
+                        }
+                        bit_representation[response_length * 8] = '\0';
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x10;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                    }
+
+                    // Select app for special events
+                    error = select_new_app(
+                        0x20, 0x40, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                    if(error != 0) {
+                        FURI_LOG_E(TAG, "Failed to select app for special events");
+                        break;
+                    }
+
+                    // Check the response after selecting app
+                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                        FURI_LOG_E(
+                            TAG,
+                            "Failed to check response after selecting app for special events");
+                        break;
+                    }
+
+                    // Now send the read command for special events
+                    for(size_t i = 1; i < 4; i++) {
+                        error = read_new_file(
+                            i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to read special event %d", i);
+                            break;
+                        }
+
+                        // Check the response after reading the file
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(
+                                TAG, "Failed to check response after reading special event %d", i);
+                            break;
+                        }
+
+                        char bit_representation[response_length * 8 + 1];
+                        bit_representation[0] = '\0';
+                        for(size_t i = 0; i < response_length; i++) {
+                            char bits[9];
+                            uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                            byte_to_binary(byte, bits);
+                            strlcat(bit_representation, bits, sizeof(bit_representation));
+                        }
+                        bit_representation[response_length * 8] = '\0';
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x40;
+                        card->dumps[card->dumps_count].record = i;
+                        card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                    }
+
                     break;
                 }
                 case CALYPSO_CARD_OPUS: {
@@ -1779,8 +2126,8 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                         bit_slice_to_dec(environment_bit_representation, start, end) * 100 +
                         bit_slice_to_dec(environment_bit_representation, start + 4, end + 4) * 10 +
                         bit_slice_to_dec(environment_bit_representation, start + 8, end + 8);
-                    card->card_type = guess_card_type(country_num, network_num);
-                    if(card->card_type == CALYPSO_CARD_RAVKAV) {
+                    if(guess_card_type(country_num, network_num) == CALYPSO_CARD_RAVKAV) {
+                        card->card_type = CALYPSO_CARD_RAVKAV;
                         card->ravkav = malloc(sizeof(RavKavCardData));
 
                         error = select_new_app(
@@ -2395,11 +2742,200 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                         free_calypso_structure(RavKavEventStructure);
 
                         break;
+                    } else {
+                        // Select app for contracts
+                        error = select_new_app(
+                            0x20, 0x20, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to select app for contracts");
+                            break;
+                        }
+
+                        // Check the response after selecting app
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(
+                                TAG, "Failed to check response after selecting app for contracts");
+                            break;
+                        }
+
+                        // Now send the read command for contracts
+                        for(size_t i = 1; i < 5; i++) {
+                            error = read_new_file(
+                                i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                            if(error != 0) {
+                                FURI_LOG_E(TAG, "Failed to read contract %d", i);
+                                break;
+                            }
+
+                            // Check the response after reading the file
+                            if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                                FURI_LOG_E(
+                                    TAG, "Failed to check response after reading contract %d", i);
+                                break;
+                            }
+
+                            char bit_representation[response_length * 8 + 1];
+                            bit_representation[0] = '\0';
+                            for(size_t i = 0; i < response_length; i++) {
+                                char bits[9];
+                                uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                                byte_to_binary(byte, bits);
+                                strlcat(bit_representation, bits, sizeof(bit_representation));
+                            }
+                            bit_representation[response_length * 8] = '\0';
+
+                            card->dumps[card->dumps_count].folder = 0x20;
+                            card->dumps[card->dumps_count].app = 0x20;
+                            card->dumps[card->dumps_count].record = i;
+                            card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                        }
+
+                        // Select app for counters
+                        error = select_new_app(
+                            0x20, 0x69, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            break;
+                        }
+
+                        // Check the response after selecting app
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            break;
+                        }
+
+                        // read file 1
+                        error = read_new_file(
+                            1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            break;
+                        }
+
+                        // Check the response after reading the file
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            break;
+                        }
+
+                        char counter_bit_representation[response_length * 8 + 1];
+                        counter_bit_representation[0] = '\0';
+                        for(size_t i = 0; i < response_length; i++) {
+                            char bits[9];
+                            uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                            byte_to_binary(byte, bits);
+                            strlcat(
+                                counter_bit_representation,
+                                bits,
+                                sizeof(counter_bit_representation));
+                        }
+
+                        card->dumps[card->dumps_count].folder = 0x20;
+                        card->dumps[card->dumps_count].app = 0x69;
+                        card->dumps[card->dumps_count].record = 1;
+                        card->dumps[card->dumps_count++].data = strdup(counter_bit_representation);
+
+                        // Select app for events
+                        error = select_new_app(
+                            0x20, 0x10, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to select app for events");
+                            break;
+                        }
+
+                        // Check the response after selecting app
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(
+                                TAG, "Failed to check response after selecting app for events");
+                            break;
+                        }
+
+                        // Now send the read command for events
+                        for(size_t i = 1; i < 4; i++) {
+                            error = read_new_file(
+                                i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                            if(error != 0) {
+                                FURI_LOG_E(TAG, "Failed to read event %d", i);
+                                break;
+                            }
+
+                            // Check the response after reading the file
+                            if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                                FURI_LOG_E(
+                                    TAG, "Failed to check response after reading event %d", i);
+                                break;
+                            }
+
+                            char bit_representation[response_length * 8 + 1];
+                            bit_representation[0] = '\0';
+                            for(size_t i = 0; i < response_length; i++) {
+                                char bits[9];
+                                uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                                byte_to_binary(byte, bits);
+                                strlcat(bit_representation, bits, sizeof(bit_representation));
+                            }
+                            bit_representation[response_length * 8] = '\0';
+
+                            card->dumps[card->dumps_count].folder = 0x20;
+                            card->dumps[card->dumps_count].app = 0x10;
+                            card->dumps[card->dumps_count].record = i;
+                            card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                        }
+
+                        // Select app for special events
+                        error = select_new_app(
+                            0x20, 0x40, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                        if(error != 0) {
+                            FURI_LOG_E(TAG, "Failed to select app for special events");
+                            break;
+                        }
+
+                        // Check the response after selecting app
+                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                            FURI_LOG_E(
+                                TAG,
+                                "Failed to check response after selecting app for special events");
+                            break;
+                        }
+
+                        // Now send the read command for special events
+                        for(size_t i = 1; i < 4; i++) {
+                            error = read_new_file(
+                                i, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                            if(error != 0) {
+                                FURI_LOG_E(TAG, "Failed to read special event %d", i);
+                                break;
+                            }
+
+                            // Check the response after reading the file
+                            if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                                FURI_LOG_E(
+                                    TAG,
+                                    "Failed to check response after reading special event %d",
+                                    i);
+                                break;
+                            }
+
+                            char bit_representation[response_length * 8 + 1];
+                            bit_representation[0] = '\0';
+                            for(size_t i = 0; i < response_length; i++) {
+                                char bits[9];
+                                uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                                byte_to_binary(byte, bits);
+                                strlcat(bit_representation, bits, sizeof(bit_representation));
+                            }
+                            bit_representation[response_length * 8] = '\0';
+
+                            card->dumps[card->dumps_count].folder = 0x20;
+                            card->dumps[card->dumps_count].app = 0x40;
+                            card->dumps[card->dumps_count].record = i;
+                            card->dumps[card->dumps_count++].data = strdup(bit_representation);
+                        }
                     }
                 }
                 default:
                     break;
                 }
+
+                FURI_LOG_I(TAG, "Card dumps count: %d", card->dumps_count);
+
+                save_card_dump(card);
 
                 widget_add_text_scroll_element(
                     widget, 0, 0, 128, 64, furi_string_get_cstr(parsed_data));
