@@ -1,8 +1,11 @@
-#include "opus_lists.h"
 #include "../../../metroflip_i.h"
 #include "../../metroflip/metroflip_api.h"
 #include "../calypso_util.h"
 #include "opus_i.h"
+#include <storage/storage.h>
+#include <toolbox/stream/stream.h>
+#include <toolbox/stream/file_stream.h>
+#include "../../stringtools/stringtools.h"
 
 const char* get_opus_service_provider(int provider) {
     switch(provider) {
@@ -49,18 +52,51 @@ const char* get_opus_transport_type(int location_id) {
     }
 }
 
-const char* get_opus_transport_line(int route_number) {
-    if(OPUS_LINES_LIST[route_number]) {
-        return OPUS_LINES_LIST[route_number];
-    } else {
-        // Return hex
-        char* route_str = malloc(9 * sizeof(char));
-        if(!route_str) {
-            return "Unknown";
+char* get_opus_transport_line(int route_number) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+
+    Stream* stream = file_stream_alloc(storage);
+    FuriString* line = furi_string_alloc();
+
+    char* found_station_name = NULL;
+
+    if(file_stream_open(stream, APP_ASSETS_PATH("opus/lines.txt"), FSAM_READ, FSOM_OPEN_EXISTING)) {
+        while(stream_read_line(stream, line)) {
+            // file is in csv format: route_number,route_name
+            // search for the station
+            furi_string_replace_all(line, "\r", "");
+            furi_string_replace_all(line, "\n", "");
+            const char* string_line = furi_string_get_cstr(line);
+            char* string_line_copy = strdup(string_line);
+            if(!string_line_copy) {
+                return "Unknown";
+            }
+            int line_route_number = atoi(get_token(string_line_copy, ",", string_line_copy));
+            if(line_route_number == route_number) {
+                found_station_name = strdup(get_token(string_line_copy, ",", string_line_copy));
+                free(string_line_copy);
+                break;
+            }
+            free(string_line_copy);
         }
-        snprintf(route_str, 9, "0x%02X", route_number);
-        return route_str;
+    } else {
+        FURI_LOG_E("Metroflip:Scene:Calypso", "Failed to open opus transport lines file");
     }
+
+    furi_string_free(line);
+    file_stream_close(stream);
+    stream_free(stream);
+
+    if(found_station_name) {
+        return found_station_name;
+    }
+
+    char* route_name = malloc(5 * sizeof(char));
+    if(!route_name) {
+        return "Unknown";
+    }
+    snprintf(route_name, 5, "0x%02X", route_number);
+    return route_name;
 }
 
 const char* get_opus_tariff(int tariff) {
@@ -92,11 +128,10 @@ void show_opus_event_info(
     OpusCardContract* contracts,
     FuriString* parsed_data) {
     UNUSED(contracts);
+    char* route_name = get_opus_transport_line(event->route_number);
+
     furi_string_cat_printf(
-        parsed_data,
-        "%s %s\n",
-        get_opus_transport_type(event->location_id),
-        get_opus_transport_line(event->route_number));
+        parsed_data, "%s %s\n", get_opus_transport_type(event->location_id), route_name);
     furi_string_cat_printf(
         parsed_data, "Transporter: %s\n", get_opus_service_provider(event->service_provider));
     furi_string_cat_printf(parsed_data, "Result: %d\n", event->result);
@@ -111,6 +146,8 @@ void show_opus_event_info(
     furi_string_cat_printf(parsed_data, "\nFirst stamp: ");
     locale_format_datetime_cat(parsed_data, &event->first_stamp_date, true);
     furi_string_cat_printf(parsed_data, "\n");
+
+    free(route_name);
 }
 
 void show_opus_contract_info(OpusCardContract* contract, FuriString* parsed_data) {

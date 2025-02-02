@@ -7,6 +7,7 @@
 #include <storage/storage.h>
 #include <toolbox/stream/stream.h>
 #include <toolbox/stream/file_stream.h>
+#include "../../stringtools/stringtools.h"
 
 #ifndef NAVIGO_H
 #define NAVIGO_H
