@@ -1501,41 +1501,40 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                     // Select app for counters
                     error = select_new_app(
                         0x20, 0x69, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
-                    if(error != 0) {
-                        break;
-                    }
+                    if(error == 0) {
+                        // Check the response after selecting app
+                        if(check_response(rx_buffer, app, &stage, &response_length) == 0) {
+                            // read file 1
+                            error = read_new_file(
+                                1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                            if(error != 0) {
+                                break;
+                            }
 
-                    // Check the response after selecting app
-                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
-                        break;
-                    }
+                            // Check the response after reading the file
+                            if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                                break;
+                            }
 
-                    // read file 1
-                    error =
-                        read_new_file(1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
-                    if(error != 0) {
-                        break;
-                    }
+                            char counter_bit_representation[response_length * 8 + 1];
+                            counter_bit_representation[0] = '\0';
+                            for(size_t i = 0; i < response_length; i++) {
+                                char bits[9];
+                                uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                                byte_to_binary(byte, bits);
+                                strlcat(
+                                    counter_bit_representation,
+                                    bits,
+                                    sizeof(counter_bit_representation));
+                            }
 
-                    // Check the response after reading the file
-                    if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
-                        break;
+                            card->dumps[card->dumps_count].folder = 0x20;
+                            card->dumps[card->dumps_count].app = 0x69;
+                            card->dumps[card->dumps_count].record = 1;
+                            card->dumps[card->dumps_count++].data =
+                                strdup(counter_bit_representation);
+                        }
                     }
-
-                    char counter_bit_representation[response_length * 8 + 1];
-                    counter_bit_representation[0] = '\0';
-                    for(size_t i = 0; i < response_length; i++) {
-                        char bits[9];
-                        uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
-                        byte_to_binary(byte, bits);
-                        strlcat(
-                            counter_bit_representation, bits, sizeof(counter_bit_representation));
-                    }
-
-                    card->dumps[card->dumps_count].folder = 0x20;
-                    card->dumps[card->dumps_count].app = 0x69;
-                    card->dumps[card->dumps_count].record = 1;
-                    card->dumps[card->dumps_count++].data = strdup(counter_bit_representation);
 
                     // Select app for events
                     error = select_new_app(
@@ -2793,43 +2792,40 @@ static NfcCommand calypso_poller_callback(NfcGenericEvent event, void* context) 
                         // Select app for counters
                         error = select_new_app(
                             0x20, 0x69, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
-                        if(error != 0) {
-                            break;
-                        }
+                        if(error == 0) {
+                            // Check the response after selecting app
+                            if(check_response(rx_buffer, app, &stage, &response_length) == 0) {
+                                // read file 1
+                                error = read_new_file(
+                                    1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
+                                if(error != 0) {
+                                    break;
+                                }
 
-                        // Check the response after selecting app
-                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
-                            break;
-                        }
+                                // Check the response after reading the file
+                                if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
+                                    break;
+                                }
 
-                        // read file 1
-                        error = read_new_file(
-                            1, tx_buffer, rx_buffer, iso14443_4b_poller, app, &stage);
-                        if(error != 0) {
-                            break;
-                        }
+                                char counter_bit_representation[response_length * 8 + 1];
+                                counter_bit_representation[0] = '\0';
+                                for(size_t i = 0; i < response_length; i++) {
+                                    char bits[9];
+                                    uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
+                                    byte_to_binary(byte, bits);
+                                    strlcat(
+                                        counter_bit_representation,
+                                        bits,
+                                        sizeof(counter_bit_representation));
+                                }
 
-                        // Check the response after reading the file
-                        if(check_response(rx_buffer, app, &stage, &response_length) != 0) {
-                            break;
+                                card->dumps[card->dumps_count].folder = 0x20;
+                                card->dumps[card->dumps_count].app = 0x69;
+                                card->dumps[card->dumps_count].record = 1;
+                                card->dumps[card->dumps_count++].data =
+                                    strdup(counter_bit_representation);
+                            }
                         }
-
-                        char counter_bit_representation[response_length * 8 + 1];
-                        counter_bit_representation[0] = '\0';
-                        for(size_t i = 0; i < response_length; i++) {
-                            char bits[9];
-                            uint8_t byte = bit_buffer_get_byte(rx_buffer, i);
-                            byte_to_binary(byte, bits);
-                            strlcat(
-                                counter_bit_representation,
-                                bits,
-                                sizeof(counter_bit_representation));
-                        }
-
-                        card->dumps[card->dumps_count].folder = 0x20;
-                        card->dumps[card->dumps_count].app = 0x69;
-                        card->dumps[card->dumps_count].record = 1;
-                        card->dumps[card->dumps_count++].data = strdup(counter_bit_representation);
 
                         // Select app for events
                         error = select_new_app(
